@@ -1,4 +1,4 @@
-# $Id 98_GarageDoorSingleButton.pm 16001 2019-08-10 13:10:00Z farion $
+# $Id$
 ##############################################################################
 #
 #     98_GarageDoorSingleButton.pm
