@@ -1,4 +1,4 @@
-# $Id$
+# $Id 98_GarageDoorSingleButton.pm 21482 2019-08-10 13:10:00Z farion $
 ##############################################################################
 #
 #     98_GarageDoorSingleButton.pm
@@ -23,12 +23,9 @@
 #     along with fhem.  If not, see <http://www.gnu.org/licenses/>.
 #
 #
-# Version: 0.0.6b
+# Version: 0.0.6
 #
 # Version History
-#
-# - 0.0.6b - 10.08.2019
-# patch from Niko1987
 #
 # - 0.0.6 - 05.10.2017
 # Fixed a bug related to BlockingCall
