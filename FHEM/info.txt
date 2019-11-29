@@ -1,1 +1,15 @@
-by Steigerbalett
+harvested by Steigerbalett
+
+Files from:
+**************************
+https://github.com/Syrex-o/FhemNative
+00_websocket.pm
+10_websocket_fhem.pm
+10_websocket_json.pm
+**************************
+https://forum.fhem.de/index.php/topic,48847.msg951389.html#msg951389
+98_GarageDoorSingleButton.pm
+**************************
+https://forum.fhem.de/index.php/topic,53319.msg972865.html#msg972865
+10_SOMFY.pm
+**************************
