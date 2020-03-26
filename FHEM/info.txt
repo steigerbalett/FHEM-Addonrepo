@@ -11,5 +11,6 @@ https://forum.fhem.de/index.php/topic,48847.msg951389.html#msg951389
 98_GarageDoorSingleButton.pm
 **************************
 https://forum.fhem.de/index.php/topic,53319.msg972865.html#msg972865
+# 10_SOMFY.pm TEST
 10_SOMFY.pm
 **************************
