@@ -19,7 +19,7 @@
 #
 ##############################################################################
 #
-# $Id: 10_SOMFY.pm 61753 2020-03-29 15:22:00Z viegener $
+# $Id: 10_SOMFY.pm 63630 2020-03-06 10:10:10Z viegener $
 #  
 # SOMFY RTS / Simu Hz protocol module for FHEM
 # (c) Thomas Dankert <post@thomyd.de>
@@ -32,28 +32,69 @@
 #	1.0		thomyd			initial implementation
 #	1.1		Elektrolurch		state changed to open,close,pos <x>
 #	1.6		viegener		New state and action handling (trying to stay compatible also adding virtual receiver capabilities)
-#	2.0					Update for official version to allow further rework and Alexa handling
-#	2.1					new attributes 	disable/disabledForIntervals
-#						disabled will be honored - no updates/no sending/no received commands
-#						allow 20 characters messages for SOMFY (not just 14)
+#  2016-12-30 viegener - New sets / code-commands 9 / a  - wind_sun_9 / wind_only_a
+#  2017-01-08 viegener - Handle fixed encryption A0 for switches - switchable fixed_enckey
+#  2017-01-21 viegener - updatestate also called in non virtual mode to sent events
+#  2017-02-19 viegener - Restructuring of method blocks
+######################################################
+# 
+# 1.9 Prep for rebuilt and signalduino
+# - myUtilsSOMFY_Initialize removed
+# - SOMFY_StartTime removed
+# - prepare: restructure code
+# - clean up history
+# - modify of definition to replace attr handling for enc and rolling_code
+# - remove attribute for enc_key and rollingcode
+# - cleanup namings of globals
+# - set default model as attribute to shutter
+# - support different settings for different models  
+# - rawDevice attr
+# - parse function calls dispatcher for rawDevices on remotes
+# - changed errors in parseFn to log
+# - some doc cleanup
+
+# - remove dummy attribute
+# - special cases for pos to avoid mypos being used since stop signal is sent after automatic stop
+# 
+# - changed Ys format only . no 0
+# - doc rework on set commands
+# - allow define with encryption key without starting with A
+# - added manual function for setting position manually without movement commands
+#
+# - remove any postfiy on position setting (like 50 pct)
+# - allow set command position
+# 2.0 Update for official version to allow further rework and Alexa handling
+
+# - change log entries and remove debug in _Parse
+# - added back parsestate temporarily - #msg743423
+# - new attributes 	disable/disabledForIntervals
+#
+#
+# - disabled will be honored - no updates/no sending/no received commands
+# - allow 20 characters messages for SOMFY (not just 14)
 #
 ###############################################################################
-# Somfy Modul - ToDo
+#
+#
+###############################################################################
+###############################################################################
+# Somfy Modul - OPEN
 ###############################################################################
 # 
 # - Doc rework on model, set commands, rawDevice, coupling remotes
+# - 
 # - test parseFn / Remotes
+# - 
 # - send also wind/sun sensor codes with code E and constant rolling code --> allow complete raw send (just address is added)
+# - 
 # - Check readings set
 # - add queuing for commands
-# - Autocreate
+# - Autocreate 
 # - Complete shutter / blind as different model
 # - Make better distinction between different IoTypes - CUL+SCC / Signalduino
 # - Known Issue - if timer is running and last command equals new command (only for open / close) - considered minor/but still relevant
-# - switch to standard 100 to 0 position
-#
-# - save RollingCode to fhem.save
-# - add associated-devices
+# - 
+# - switch to standard 100 to 0 position 
 #
 ###############################################################################
 #   
@@ -71,13 +112,13 @@ use warnings;
 #use List::Util qw(first max maxstr min minstr reduce shuffle sum);
 
 my %somfy_codes = (
-	"10" => "go-my",	# goto "my" position
+	"10" => "go-my",    # goto "my" position
 	"11" => "stop", 	# stop the current movement
-	"20" => "off",		# go "up"
-	"40" => "on",		# go "down"
-	"80" => "prog", 	# finish pairing
-	"90" => "wind_sun_9",	# wind and sun (sun + flag)
-	"A0" => "wind_only_a",	# wind only (flag)
+	"20" => "off",      # go "up"
+	"40" => "on",       # go "down"
+	"80" => "prog",     # finish pairing
+	"90" => "wind_sun_9",     # wind and sun (sun + flag)
+	"A0" => "wind_only_a",     # wind only (flag)
 	"100" => "on-for-timer",
 	"101" => "off-for-timer",
 	"XX" => "z_custom",	# custom control code
@@ -98,8 +139,8 @@ my %somfy_sets_addition = (
 	"pos" => "100,90,80,70,60,50,40,30,20,10,0",
 	"position" => "100,90,80,70,60,50,40,30,20,10,0",
 	"manual" => "200,100,90,80,70,60,50,40,30,20,10,0,on,off",
-	"wind_sun_9" => "noArg",
-	"wind_only_a" => "noArg",
+  "wind_sun_9" => "noArg",
+  "wind_only_a" => "noArg",
 );
 
 my %somfy_sendCommands = (
@@ -153,9 +194,9 @@ my %translations100To0 = (
 ##################################################
 # Forward declarations
 #
-sub SOMFY_CalcCurrentPos;
-sub SOMFY_isSwitch;
-sub SOMFY_SendCommand;
+sub SOMFY_CalcCurrentPos($$$$);
+sub SOMFY_isSwitch($);
+sub SOMFY_SendCommand($@);
 
 
 ######################################################
@@ -171,7 +212,7 @@ sub SOMFY_SendCommand;
 
 
 #############################
-sub SOMFY_Initialize {
+sub SOMFY_Initialize($) {
 	my ($hash) = @_;
 
 	# map commands from web interface to codes used in Somfy RTS
@@ -179,7 +220,7 @@ sub SOMFY_Initialize {
 		$somfy_c2b{ $somfy_codes{$k} } = $k;
 	}
 
-#                       YsKKC0RRRRAAAAAA
+	#                       YsKKC0RRRRAAAAAA
 #	$hash->{Match}	= "^Ys...0..........\$";
 	$hash->{Match}	= "^Ys..............\$";
 	$hash->{SetFn}		= "SOMFY_Set";
@@ -194,7 +235,7 @@ sub SOMFY_Initialize {
 	  . " drive-up-time-to-100"
 	  . " drive-up-time-to-open "
 	  . " additionalPosReading  "
-	  . " positionInverse:1,0  "
+    . " positionInverse:1,0  "
 	  . " IODev"
 	  . " symbol-length"
 	  . " repetition"
@@ -203,18 +244,17 @@ sub SOMFY_Initialize {
 	  . " do_not_notify:1,0"
 	  . " ignore:0,1"
 	  . " disable:0,1"
-	  . " disabledForIntervals "
-	  . " model:somfyblinds,somfyshutter,somfyremote,somfyswitch2,somfyswitch4"
+    . " disabledForIntervals "
+    . " model:somfyblinds,somfyshutter,somfyremote,somfyswitch2,somfyswitch4"
 	  . " loglevel:0,1,2,3,4,5,6"
 	  . " rawDevice"
 	  . " $readingFnAttributes";
-	  
-	  return;
+
 }
 
 
 #############################
-sub SOMFY_Define {
+sub SOMFY_Define($$) {
 	my ( $hash, $def ) = @_;
 	my @a = split( "[ \t][ \t]*", $def );
 
@@ -238,7 +278,11 @@ sub SOMFY_Define {
 	$hash->{ADDRESS} = uc($address);
 
   # set default model if not yet set
-	$attr{$name}{model} //= "somfyshutter";
+  if ( ! defined( $attr{$name}{model} ) ) {
+    $attr{$name}{model} = "somfyshutter";
+  }
+  
+  
   
 	# check optional arguments for device definition
 	if ( int(@a) > 3 ) {
@@ -278,13 +322,11 @@ sub SOMFY_Define {
 	$modules{SOMFY}{defptr}{$code}{$name} = $hash;
 	$hash->{move} = 'stop';
 	AssignIoPort($hash);
-	
-	return;
 }
 
 
 #############################
-sub SOMFY_Undef {
+sub SOMFY_Undef($$) {
 	my ( $hash, $name ) = @_;
 
 	foreach my $c ( keys %{ $hash->{CODE} } ) {
@@ -298,11 +340,11 @@ sub SOMFY_Undef {
 			}
 		}
 	}
-	return;
+	return undef;
 }
 
 ##############################
-sub SOMFY_Attr {
+sub SOMFY_Attr(@) {
 	my ($cmd,$name,$aName,$aVal) = @_;
 	my $hash = $defs{$name};
 
@@ -378,7 +420,7 @@ sub SOMFY_Attr {
 		}
 	}
 
-	return;
+	return undef;
 }
 
 ##############################################################################
@@ -392,7 +434,7 @@ sub SOMFY_Attr {
  
 
 #############################
-sub SOMFY_DispatchRemoteCmd {
+sub SOMFY_DispatchRemoteCmd($$) {
 	my ($hash, $cmd) = @_;
 	my $name = $hash->{NAME};
   
@@ -434,12 +476,11 @@ sub SOMFY_DispatchRemoteCmd {
 	} else {
 		Log3 $hash, 1, "SOMFY_DispatchRemoteCmd No rawDevice set in remote $name";
 	}
-	return;
 
 }
 
 #############################
-sub SOMFY_Parse {
+sub SOMFY_Parse($$) {
 	my ($hash, $msg) = @_;
 	my $name = $hash->{NAME};
   
@@ -464,7 +505,7 @@ sub SOMFY_Parse {
     
     if ( $ret ) {
       Log3 $name, 1, "$name: SOMFY_Parse : ".$ret;
-      return;
+      return undef;
     }
 		
 		Log3 $name, 4, "$name: Somfy RTS preprocessing check: $check enc: $encData dec: $decData";
@@ -483,7 +524,7 @@ sub SOMFY_Parse {
   # Check for correct length
   if ( length($msg) != 16 ) {
     Log3 $name, 1, "$name: SOMFY_Parse : SOMFY incorrect length for command (".$msg.") / length should be 16";
-    return;
+    return undef;
   }
   
   # get address
@@ -563,7 +604,7 @@ sub SOMFY_Parse {
 
 ###################################
 # call with hash, name, [virtual/send], set-args   (send is default if ommitted)
-sub SOMFY_Set {
+sub SOMFY_Set($@) {
 	my ( $hash, $name, @args ) = @_;
 
 	if ( lc($args[0]) =~m/(virtual|send)/ ) {
@@ -571,18 +612,17 @@ sub SOMFY_Set {
 	} else {
 		SOMFY_InternalSet( $hash, $name, 'send', @args );
 	}
-	return;
 }
 
 	
 ###################################
 # call with hash, name, virtual/send, set-args
-sub SOMFY_InternalSet {
+sub SOMFY_InternalSet($@) {
 	my ( $hash, $name, $mode, @args ) = @_;
 	
-  return () if ( IsIgnored($name) );
+  return undef if ( IsIgnored($name) );
   
-  return () if ( IsDisabled($name) );
+  return undef if ( IsDisabled($name) );
   
 ### Check Args
 	return "SOMFY_InternalSet: mode must be virtual or send: $mode " if ( $mode !~m/(virtual|send)/ );
@@ -936,7 +976,7 @@ sub SOMFY_InternalSet {
 		delete $hash->{starttime};
 	}
 
-	return;
+	return undef;
 } # end sub SOMFY_setFN
 ###############################
 
@@ -955,7 +995,7 @@ sub SOMFY_InternalSet {
 
 #############################
 # 0 blinds / 2 or 4 for switches
-sub SOMFY_isSwitch {
+sub SOMFY_isSwitch($) {
 	my ($hash) = @_;
 	my $name = $hash->{NAME};
  
@@ -972,7 +1012,7 @@ sub SOMFY_isSwitch {
   
 
 #############################
-sub SOMFY_isShutter {
+sub SOMFY_isShutter($) {
 	my ($hash) = @_;
 	my $name = $hash->{NAME};
  
@@ -983,7 +1023,7 @@ sub SOMFY_isShutter {
 }
 
 #############################
-sub SOMFY_isRemote {
+sub SOMFY_isRemote($) {
 	my ($hash) = @_;
 	my $name = $hash->{NAME};
  
@@ -994,7 +1034,7 @@ sub SOMFY_isRemote {
 }
   
 #####################################
-sub SOMFY_updateDef
+sub SOMFY_updateDef($;$$)
 {
 	my ($hash, $ec, $rc) = @_;
 	my $name = $hash->{NAME};
@@ -1003,7 +1043,6 @@ sub SOMFY_updateDef
   $rc = ReadingsVal($name, "rolling_code", "0000") if ( ! defined( $rc ) );
   
   $hash->{DEF} = $hash->{ADDRESS}." ".uc($ec)." ".uc($rc);
-  return;
 }
 
 ######################################################
@@ -1015,7 +1054,7 @@ sub SOMFY_updateDef
 ######################################################
 
 ###################################
-sub SOMFY_getTestSets {
+sub SOMFY_getTestSets($;$) {
 	my ($hash, $cmd) = @_;
 	my $name = $hash->{NAME};
 
@@ -1053,7 +1092,7 @@ sub SOMFY_getTestSets {
   
   
 ###################################
-sub SOMFY_Runden {
+sub SOMFY_Runden($) {
 	my ($v) = @_;
 	if ( ( $v > 105 ) && ( $v < 195 ) ) {
 		$v = 150;
@@ -1066,7 +1105,7 @@ sub SOMFY_Runden {
 
 
 ###################################
-sub SOMFY_Translate {
+sub SOMFY_Translate($) {
 	my ($v) = @_;
 
 	if(exists($translations{$v})) {
@@ -1078,7 +1117,7 @@ sub SOMFY_Translate {
 
 
 ###################################
-sub SOMFY_Translate100To0 {
+sub SOMFY_Translate100To0($) {
 	my ($v) = @_;
 
 	if(exists($translations100To0{$v})) {
@@ -1090,7 +1129,7 @@ sub SOMFY_Translate100To0 {
 
 
 #############################
-sub SOMFY_ConvertFrom100To0 {
+sub SOMFY_ConvertFrom100To0($) {
 	my ($v) = @_;
   
   return $v if ( ! defined($v) );
@@ -1103,7 +1142,7 @@ sub SOMFY_ConvertFrom100To0 {
 } 
 
 #############################
-sub SOMFY_ConvertTo100To0 {
+sub SOMFY_ConvertTo100To0($) {
 	my ($v) = @_;
   
   return $v if ( ! defined($v) );
@@ -1116,7 +1155,7 @@ sub SOMFY_ConvertTo100To0 {
 
 
 #############################
-sub SOMFY_RoundInternal {
+sub SOMFY_RoundInternal($) {
 	my ($v) = @_;
 	return sprintf("%d", ($v + ($somfy_posAccuracy/2)) / $somfy_posAccuracy) * $somfy_posAccuracy;
 } # end sub SOMFY_RoundInternal
@@ -1124,7 +1163,7 @@ sub SOMFY_RoundInternal {
 
 ###################################
 # call with hash, translated state
-sub SOMFY_CalcCurrentPos {
+sub SOMFY_CalcCurrentPos($$$$) {
 
 	my ($hash, $move, $pos, $dt) = @_;
 
@@ -1155,8 +1194,7 @@ sub SOMFY_CalcCurrentPos {
 					$newPos = maxNum( 0, ($pos - $newPos) );
 				}
 			} else {
-				Log3($name,1,"SOMFY_CalcCurrentPos: $name move wrong $move - set to 4POS");
-						$newPos = $pos;
+				Log3($name,1,"SOMFY_CalcCurrentPos: $name move wrong $move");
 			}			
 		} else {
 			if($move eq 'on') {
@@ -1190,8 +1228,7 @@ sub SOMFY_CalcCurrentPos {
 					}
 				}
 			} else {
-				Log3($name,1,"SOMFY_CalcCurrentPos: $name move wrong $move - set to 4POS");
-						$newPos = $pos;
+				Log3($name,1,"SOMFY_CalcCurrentPos: $name move wrong $move");
 			}			
 		}
 	} else {
@@ -1214,7 +1251,7 @@ sub SOMFY_CalcCurrentPos {
 
 
 #############################
-sub SOMFY_UpdateStartTime {
+sub SOMFY_UpdateStartTime($) {
 	my ($d) = @_;
 
 	my ($s, $ms) = gettimeofday();
@@ -1230,7 +1267,7 @@ sub SOMFY_UpdateStartTime {
 
 
 ###################################
-sub SOMFY_TimedUpdate {
+sub SOMFY_TimedUpdate($) {
 	my ($hash) = @_;
 	my $name = $hash->{NAME};
   
@@ -1282,13 +1319,12 @@ sub SOMFY_TimedUpdate {
 	}
 	
 	Log3($hash->{NAME},5,"SOMFY_TimedUpdate DONE");
-	return;
 } # end sub SOMFY_TimedUpdate
 
 
 ###################################
 #	SOMFY_UpdateState( $hash, $newState, $move, $updateState );
-sub SOMFY_UpdateState {
+sub SOMFY_UpdateState($$$$$) {
 	my ($hash, $newState, $move, $updateState, $doTrigger) = @_;
 	my $name = $hash->{NAME};
 
@@ -1351,14 +1387,13 @@ sub SOMFY_UpdateState {
 	}
 	$hash->{move} = $move;
 	
-	readingsEndUpdate($hash,$doTrigger);
-	return;
+	readingsEndUpdate($hash,$doTrigger); 
 } # end sub SOMFY_UpdateState
 
 
 ###################################
 # Return timingvalues from attr and after correction
-sub SOMFY_getTimingValues {
+sub SOMFY_getTimingValues($) {
 	my ($hash) = @_;
 
 	my $name = $hash->{NAME};
@@ -1411,7 +1446,7 @@ sub SOMFY_getTimingValues {
 ##############################################################################
 
 #############################
-sub SOMFY_RTS_Crypt
+sub SOMFY_RTS_Crypt($$$)
 {
 	my ($operation, $name, $data) = @_;
 	
@@ -1431,7 +1466,7 @@ sub SOMFY_RTS_Crypt
 }
 
 #############################
-sub SOMFY_RTS_Check
+sub SOMFY_RTS_Check($$)
 {
 	my ($name, $data) = @_;
 	
@@ -1459,7 +1494,7 @@ sub SOMFY_RTS_Check
 
 
 #####################################
-sub SOMFY_SendCommand
+sub SOMFY_SendCommand($@)
 {
 	my ($hash, @args) = @_;
 	my $ret = undef;
@@ -1655,9 +1690,11 @@ sub SOMFY_SendCommand
 <ul>
   The Somfy RTS (identical to Simu Hz) protocol is used by a wide range of devices,
   which are either senders or receivers/actuators.
-  Sending and reception of Somfy remotes is supported through the usage of an SIGNALduino
-  <a href="https://wiki.fhem.de/wiki/SIGNALduino">https://wiki.fhem.de/wiki/SIGNALduino</a>
-  device (which must be defined first). Which can then be used to connect to the SOMFY device.
+  Right now only SENDING of Somfy commands is implemented in the CULFW, so this module currently only
+  supports devices like blinds, dimmers, etc. through a <a href="#CUL">CUL</a> device (which must be defined first).
+  Reception of Somfy remotes is only supported indirectly through the usage of an FHEMduino 
+  <a href="http://www.fhemwiki.de/wiki/FHEMduino">http://www.fhemwiki.de/wiki/FHEMduino</a>
+  which can then be used to connect to the SOMFY device.
 
   <br><br>
 
