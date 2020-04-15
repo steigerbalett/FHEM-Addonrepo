@@ -1,6 +1,6 @@
 #########################################################################
-# $Id: 98_vitoconnect.pm 88283 2020-04-01 17:30:00Z andreas13 $
-# fhem Modul für Vissmann API. Based on investigation of "thetrueavatar"
+# $Id: 98_vitoconnect.pm 88349 2020-04-01 17:30:00Z andreas13 $
+# fhem Modul für Viessmann API. Based on investigation of "thetrueavatar"
 # (https://github.com/thetrueavatar/Viessmann-Api)
 #   
 #     This file is part of fhem.
@@ -22,7 +22,7 @@
 #   Changelog:
 #
 #   2018-11-24		initial version
-#	 2018-12-11		non-blocking
+#	2018-12-11		non-blocking
 #                 Reading "status" in "state" umbenannt
 #   2018-12-23    Neue Werte in der API werden unter ihrem JSON Name als Reading eingetragen
 #                 Neue Readings:
@@ -141,6 +141,9 @@
 #
 # 2019-12-25		heating.solar.power.cumulativeProduced.value, heating.circuits.X.geofencing.active, heating.circuits.X.geofencing.status hinzugefügt
 #                   Behoben: Readings wurden nicht mehr aktualisiert, wenn Resource an weiteren Stellen nicht als JSON interpretiert werden konnte(Forum: #390)
+#
+# 2020-04-15		Fix Typo viessmann
+#					remove prototypes
 #
 #   ToDo:         timeout konfigurierbar machen
 #						"set"s für Schedules zum Steuern der Heizung implementieren
@@ -1598,14 +1601,14 @@ sub vitoconnect_ReadKeyValue {
 
 =pod
 =item device
-=item summary support for Vissmann API
-=item summary_DE Unterstützung für die Vissmann API
+=item summary support for Viessmann API
+=item summary_DE Unterstützung für die Viessmann API
 =begin html
 
 <a name="vitoconnect"></a>
 <h3>vitoconnect</h3>
 <ul>
-    <i>vitoconnect</i> implements a device for the Vissmann API <a href="https://www.vissmann.de/de/vissmann-apps/vitoconnect.html">Vitoconnect100</a>
+    <i>vitoconnect</i> implements a device for the Viessmann API <a href="https://www.viessmann.de/de/viessmann-apps/vitoconnect.html">Vitoconnect100</a>
     based on investigation of <a href="https://github.com/thetrueavatar/Viessmann-Api">thetrueavatar</a><br>
     
 	 You need the user and password from the ViCare App account.<br>
@@ -1647,7 +1650,7 @@ sub vitoconnect_ReadKeyValue {
       <li><code>password <passwd></code><br>
         store password in key store</li>
     	<li><code>logResponseOnce</code><br>
-        dumps the json response of Vissmann server to entities.json, gw.json, actions.json in FHEM log directory</li>
+        dumps the json response of Viessmann server to entities.json, gw.json, actions.json in FHEM log directory</li>
         
       <li><code>HK1-Heizkurve-Niveau shift</code><br>
       set shift of heating curve</li>
@@ -1711,7 +1714,7 @@ sub vitoconnect_ReadKeyValue {
         Attributes:
         <ul>
 				<li><i>disable</i>:<br>         
-                stop communication with Vissmann server  
+                stop communication with Viessmann server  
             </li>
             <li><i>verbose</i>:<br>         
                 set the verbosity level  
