@@ -1,5 +1,5 @@
 #########################################################################
-# $Id: 98_vitoconnect.pm 88263 2020-04-01 17:30:00Z andreas13 $
+# $Id: 98_vitoconnect.pm 88263 2020-04-15 11:30:00Z andreas13 $
 # fhem Modul für Viessmann API. Based on investigation of "thetrueavatar"
 # (https://github.com/thetrueavatar/Viessmann-Api)
 #   
