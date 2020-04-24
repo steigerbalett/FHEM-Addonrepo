@@ -19,7 +19,7 @@
 #
 ##############################################################################
 #
-# $Id: 10_SOMFY.pm 64385 2020-04-24 10:10:10Z viegener $
+# $Id: 10_SOMFY.pm 66390 2020-04-24 10:10:10Z viegener $
 #  
 # SOMFY RTS / Simu Hz protocol module for FHEM
 # (c) Thomas Dankert <post@thomyd.de>
