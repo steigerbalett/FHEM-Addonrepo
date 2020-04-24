@@ -13,3 +13,5 @@ https://forum.fhem.de/index.php/topic,48847.msg951389.html#msg951389
 https://forum.fhem.de/index.php/topic,53319.msg972865.html#msg972865
 10_SOMFY.pm
 **************************
+https://forum.fhem.de/index.php/topic,102497.0.html
+59_Buienradar
