@@ -15,3 +15,7 @@ https://forum.fhem.de/index.php/topic,53319.msg972865.html#msg972865
 **************************
 https://forum.fhem.de/index.php/topic,102497.0.html
 59_Buienradar
+**************************
+https://github.com/pa-pa/AskSinPP/tree/master/examples/custom/contrib/FHEM
+HMConfig_AskSinPPCustom.pm
+HMMsg.pm
