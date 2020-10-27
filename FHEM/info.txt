@@ -19,3 +19,6 @@ https://forum.fhem.de/index.php/topic,102497.0.html
 https://github.com/pa-pa/AskSinPP/tree/master/examples/custom/contrib/FHEM
 HMConfig_AskSinPPCustom.pm
 HMMsg.pm
+**************************
+https://github.com/jnsbyr/fhem
+99_DWD_OpenData_Weblink.pm
