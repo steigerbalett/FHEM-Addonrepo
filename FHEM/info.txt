@@ -3,8 +3,6 @@ harvested by Steigerbalett
 Files from:
 **************************
 https://github.com/Ralf9
-10_IT.pm
-14_CUL_TCM97001.pm
 36_PCA301.pm
 **************************
 https://github.com/Syrex-o/FhemNative
