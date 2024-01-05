@@ -3,7 +3,10 @@ harvested by Steigerbalett
 Files from:
 **************************
 https://github.com/Ralf9
+https://github.com/Ralf9/SIGNALduinoAdv_FHEM/tree/master
 36_PCA301.pm
+10_Somfy.pm
+10_KOPP_FC.pm
 **************************
 https://github.com/Syrex-o/FhemNative
 00_websocket.pm
