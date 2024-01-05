@@ -19,7 +19,7 @@
 #
 ##############################################################################
 #
-# $Id: 10_SOMFY.pm 66390 2020-04-24 10:10:10Z viegener $
+# $Id: 10_SOMFY.pm 26135 2024-01-04 22:07:34Z viegener $
 #  
 # SOMFY RTS / Simu Hz protocol module for FHEM
 # (c) Thomas Dankert <post@thomyd.de>
@@ -76,6 +76,25 @@
 # - new attr autoStoreRollingCode - store rc in uniqueID
 # - store rolling code in uniqueid based on addr
 # - ensure largest rollingcode (either reading or unqieid is used)
+# - FIX: hex value warning for rollcode 
+# - FIX: allow empty ioTypes for testing
+# - finalPosReading as addtl attribute - specify name
+# -   finalPosReading set at the end of a move with final position
+# - change all old log commands to log3
+# - log rolling code and enc key on sending verbose 5
+# - document rawdevice
+# - fix for finalposreading also reacting in virtual mode
+# - fix for finalposreading also reacting on stop
+
+# - store roll code on setting of attribute
+# - no update of DEF anymore with rolling code (roll code and enc key will be removed)
+# - FIX: corrected autostore rolling code (esp. restart)
+# - FIX: DEBUG commands removed
+
+# - BO code used for "lamellen" of blinds - considered stop fro remotes
+# - Correct match for long commands according to #msg1224029
+
+# - fix manual command also for timed blinds
 #
 ###############################################################################
 #
@@ -85,6 +104,8 @@
 # Somfy Modul - OPEN
 ###############################################################################
 # 
+# - B0 command? - new rolling code? - reaction on status - ?
+# - 
 # - Doc rework on model, set commands, rawDevice, coupling remotes
 # - 
 # - test parseFn / Remotes
@@ -97,8 +118,6 @@
 # - Complete shutter / blind as different model
 # - Make better distinction between different IoTypes - CUL+SCC / Signalduino
 # - Known Issue - if timer is running and last command equals new command (only for open / close) - considered minor/but still relevant
-# - 
-# - switch to standard 100 to 0 position 
 #
 ###############################################################################
 #   
@@ -123,6 +142,7 @@ my %somfy_codes = (
 	"80" => "prog",     # finish pairing
 	"90" => "wind_sun_9",     # wind and sun (sun + flag)
 	"A0" => "wind_only_a",     # wind only (flag)
+	"B0" => "blind",     # blind command through wheel - also stops movement
 	"100" => "on-for-timer",
 	"101" => "off-for-timer",
 	"XX" => "z_custom",	# custom control code
@@ -204,7 +224,10 @@ sub SOMFY_SendCommand($@);
 
 sub SOMFY_readRollCode($);
 sub SOMFY_storeRollCode($$);
-sub SOMFY_getRollCode($);
+sub SOMFY_getRollCode($;$);
+
+sub SOMFY_UpdateState($$$$$$);
+
 
 ######################### 
 ######################################################
@@ -230,19 +253,24 @@ sub SOMFY_Initialize($) {
 
 	#                       YsKKC0RRRRAAAAAA
 #	$hash->{Match}	= "^Ys...0..........\$";
-	$hash->{Match}	= "^Ys..............\$";
-	$hash->{SetFn}		= "SOMFY_Set";
+#	$hash->{Match}	= "^Ys..............\$";
+
+# allow also matches for longer commands of newer devices -->   
+	$hash->{Match}	= "^Ys..............";    #msg1224029
+
+	$hash->{SetFn}		= \&SOMFY_Set;
 	#$hash->{StateFn} 	= "SOMFY_SetState";
-	$hash->{DefFn}   	= "SOMFY_Define";
-	$hash->{UndefFn}	= "SOMFY_Undef";
-	$hash->{ParseFn}  	= "SOMFY_Parse";
-	$hash->{AttrFn}  	= "SOMFY_Attr";
+	$hash->{DefFn}   	= \&SOMFY_Define;
+	$hash->{UndefFn}	= \&SOMFY_Undef;
+	$hash->{ParseFn}  	= \&SOMFY_Parse;
+	$hash->{AttrFn}  	= \&SOMFY_Attr;
 
 	$hash->{AttrList} = " drive-down-time-to-100"
 	  . " drive-down-time-to-close"
 	  . " drive-up-time-to-100"
 	  . " drive-up-time-to-open "
 	  . " additionalPosReading  "
+	  . " finalPosReading  "
     . " positionInverse:1,0  "
 	  . " IODev"
 	  . " symbol-length"
@@ -332,6 +360,10 @@ sub SOMFY_Define($$) {
 	$hash->{CODE}{ $ncode++ } = $code;
 	$modules{SOMFY}{defptr}{$code}{$name} = $hash;
 	$hash->{move} = 'stop';
+  
+  # change 23.9.2020 - def will be modified to only include address
+  $hash->{DEF} = $hash->{ADDRESS}." ";  
+  
 	AssignIoPort($hash);
 }
 
@@ -409,6 +441,19 @@ sub SOMFY_Attr(@) {
         readingsEndUpdate($hash,1);  
     }
   
+  } elsif ($aName eq 'autoStoreRollingCode') {
+    if ($cmd eq "set") {
+      # change 23.9.2020 - store roll code on setting of attribute
+      if ( $aVal ) {
+        my $rollcode = SOMFY_getRollCode( $hash, 1 );  # ensure rollcode being read first during start specifically
+        SOMFY_storeRollCode( $hash, $rollcode );
+      } else {
+        SOMFY_storeRollCode( $hash, undef );
+      }
+    } elsif ($cmd eq "del") {
+      SOMFY_storeRollCode( $hash, undef );
+    }
+  
   } elsif ($cmd eq "set") {
 		if($aName eq 'drive-up-time-to-100') {
 			return "SOMFY_attr: value must be >=0 and <= 100" if($aVal < 0 || $aVal > 100);
@@ -435,13 +480,6 @@ sub SOMFY_Attr(@) {
 		}
 
 
-  } elsif ($aName eq 'autoStoreRollingCode') {
-    if ($cmd eq "set") {
-      SOMFY_storeRollCode( $hash, undef ) if ( ! $aVal );
-    } elsif ($cmd eq "del") {
-      SOMFY_storeRollCode( $hash, undef );
-    }
-  
 	}
 
 	return undef;
@@ -464,6 +502,10 @@ sub SOMFY_DispatchRemoteCmd($$) {
   
 	if ($cmd eq "10") {
 		$cmd = "11"; # use "stop" instead of "go-my"
+  }
+
+	if ($cmd eq "B0") {
+		$cmd = "11"; # use "stop" instead of "blind"
   }
 
 	my $txtcmd = $somfy_codes{ $cmd };
@@ -514,7 +556,7 @@ sub SOMFY_Parse($$) {
 #	return "IODev unsupported" if ((my $ioType = $hash->{TYPE}) !~ m/^(CUL|SIGNALduino)$/);
 
 	# preprocessing if IODev is SIGNALduino	
-	if ($ioType eq "SIGNALduino") {
+	if ($ioType =~ m/^SIGNALduino/) {
 		my $encData = substr($msg, 2);
     $ret = "Somfy RTS message format error (length must be 14 or 20)! :".$encData.":" if ( (length($encData) != 14) && (length($encData) != 20));
     $ret = "Somfy RTS message format error! :".$encData.":" if ( ( ! $ret ) && ($encData !~ m/^[0-9A-F]+$/) );
@@ -730,6 +772,7 @@ sub SOMFY_InternalSet($@) {
 	my $move = $cmd;
 	my $newState;
 	my $updateState;
+ 
 	
 	# translate state info to numbers - closed = 200 , open = 0    (correct missing values)
 	if ( !defined($pos) ) {
@@ -771,7 +814,6 @@ sub SOMFY_InternalSet($@) {
 			$newState = 'open';
     } else {
     }
-
   
 	} elsif(!defined($t1downclose) || !defined($t1down100) || !defined($t1upopen) || !defined($t1up100)) {
 		#if timings not set 
@@ -930,7 +972,8 @@ sub SOMFY_InternalSet($@) {
 			}
 
 		} elsif($cmd =~m/manual/) { 
-			$newState = $arg1;
+#      $updateState = $arg1;
+      $newState = $arg1;
 
 		}			
 
@@ -939,7 +982,8 @@ sub SOMFY_InternalSet($@) {
 			if ( defined( $updateState )) {
 				$updateState = minNum( 100, $updateState );
 			}
-			$newState = minNum( 100, $posRounded );
+# not sure why posrounded was used here			$newState = minNum( 100, $posRounded );
+			$newState = minNum( 100, $newState );
 		}
 	}
 
@@ -950,10 +994,15 @@ sub SOMFY_InternalSet($@) {
 	} else {
 		Log3($name,5,"SOMFY_set: handled for drive/udpate:  updateState ::  drivet :$drivetime: updatet :$updatetime: ");
 	}
+  
+  # check if finalPos or will be updated after time
+  my $isFinal = 0;
+  $isFinal = 1 if ( ( $updatetime != 0 ) || ( $drivetime != 0 ) || ( $move eq 'stop' ) );  
+    
 			
 	# bulk update should do trigger if virtual mode
 #	SOMFY_UpdateState( $hash, $newState, $move, $updateState, ( $mode eq 'virtual' ) );
-	SOMFY_UpdateState( $hash, $newState, $move, $updateState, 1 );
+	SOMFY_UpdateState( $hash, $newState, $move, $updateState, 1, $isFinal );
 	
 	### send command
 	if ( $mode ne 'virtual' ) {
@@ -1057,20 +1106,28 @@ sub SOMFY_readRollCode($)
 
 #####################################
 # get the rolling code either from Reading or if empty consider stored from uniqueid
-sub SOMFY_getRollCode($)
+sub SOMFY_getRollCode($;$)
 {
-   my ($hash) = @_;
+   my ($hash, $doAutoStore) = @_;
    
    my $name = $hash->{NAME};
    
  	 my $rollingcode = uc(ReadingsVal($name, "rolling_code", "0000"));
-
-   if ( AttrVal( $name, "autoStoreRollingCode", 0 ) ) {
+   
+   $doAutoStore = AttrVal( $name, "autoStoreRollingCode", 0 ) if ( ! defined( $doAutoStore ) );
+   
+   if ( $doAutoStore ) {
       my $storeRC = uc( SOMFY_readRollCode( $hash ) );
-      $storeRC = "0000" if ( $storeRC !~ /[0-9a-f]{4}/ );
-      if ( $storeRC > $rollingcode ) {
+      $storeRC = "0000" if ( $storeRC !~ /[0-9A-F]{4}/ );
+      my $storeDec = hex( $storeRC );
+      my $rollDec = hex( $rollingcode );
+#      Debug "Store  hex: $storeRC    dec: $storeDec";
+#      Debug "RollC  hex: $rollingcode    dec: $rollDec";
+      
+      if ( $storeDec > $rollDec ) {
         $rollingcode = $storeRC;
       }
+#      Debug "Result Rolling code: $rollingcode";
    }
 
    return $rollingcode;
@@ -1119,17 +1176,18 @@ sub SOMFY_isRemote($) {
   
 }
   
-#####################################
-sub SOMFY_updateDef($;$$)
-{
-	my ($hash, $ec, $rc) = @_;
-	my $name = $hash->{NAME};
+# 26.9.2020 - not used anymore - rc and ec removed from def on define
+# #####################################
+# sub SOMFY_updateDef($;$$)
+# {
+	# my ($hash, $ec, $rc) = @_;
+	# my $name = $hash->{NAME};
 
-  $ec = ReadingsVal($name, "enc_key", "A0") if ( ! defined( $ec ) );
-  $rc = SOMFY_getRollCode( $hash ) if ( ! defined( $rc ) );
+  # $ec = ReadingsVal($name, "enc_key", "A0") if ( ! defined( $ec ) );
+  # $rc = SOMFY_getRollCode( $hash ) if ( ! defined( $rc ) );
   
-  $hash->{DEF} = $hash->{ADDRESS}." ".uc($ec)." ".uc($rc);
-}
+  # $hash->{DEF} = $hash->{ADDRESS}." ".uc($ec)." ".uc($rc);
+# }
 
 ######################################################
 ######################################################
@@ -1384,7 +1442,7 @@ sub SOMFY_TimedUpdate($) {
 			SOMFY_SendCommand($hash, $hash->{runningcmd});
 		}
 		# trigger update from timer
-		SOMFY_UpdateState( $hash, $hash->{updateState}, 'stop', undef, 1 );
+		SOMFY_UpdateState( $hash, $hash->{updateState}, 'stop', undef, 1, 1 );   ## is final 
 		delete $hash->{starttime};
 		delete $hash->{runningtime};
 		delete $hash->{runningcmd};
@@ -1393,7 +1451,7 @@ sub SOMFY_TimedUpdate($) {
 		if($utime > $somfy_updateFreq) {
 			$utime = $somfy_updateFreq;
 		}
-		SOMFY_UpdateState( $hash, $pos, $hash->{move}, $hash->{updateState}, 1 );
+		SOMFY_UpdateState( $hash, $pos, $hash->{move}, $hash->{updateState}, 1, 0 );   ## not final yet
 		if ( defined( $hash->{runningcmd} )) {
 			Log3($hash->{NAME},4,"SOMFY_TimedUpdate: $hash->{NAME} -> stopping in $hash->{runningtime} sec");
 		} else {
@@ -1409,14 +1467,20 @@ sub SOMFY_TimedUpdate($) {
 
 
 ###################################
-#	SOMFY_UpdateState( $hash, $newState, $move, $updateState );
-sub SOMFY_UpdateState($$$$$) {
-	my ($hash, $newState, $move, $updateState, $doTrigger) = @_;
+#	SOMFY_UpdateState( $hash, $newState, $move, $updateState, drotrigger, isFinal );
+sub SOMFY_UpdateState($$$$$$) {
+	my ($hash, $newState, $move, $updateState, $doTrigger, $isFinal) = @_;
 	my $name = $hash->{NAME};
 
   my $addtlPosReading = AttrVal($hash->{NAME},'additionalPosReading',undef);
   if ( defined($addtlPosReading )) {
     $addtlPosReading = undef if ( ( $addtlPosReading eq "" ) or ( $addtlPosReading eq "state" ) or ( $addtlPosReading eq "position" ) or ( $addtlPosReading eq "exact" ) );
+  }
+
+  $isFinal = 0 if ( ! defined( $isFinal ) );
+  my $finalPosReading = AttrVal($hash->{NAME},'finalPosReading',undef);
+  if ( defined($finalPosReading )) {
+    $finalPosReading = undef if ( ( $finalPosReading eq "" ) or ( $finalPosReading eq "state" ) or ( $finalPosReading eq "position" ) or ( $finalPosReading eq "exact" ) );
   }
 
   my $newExact = $newState;
@@ -1460,12 +1524,12 @@ sub SOMFY_UpdateState($$$$$) {
 
 		readingsBulkUpdate($hash,"position",$rounded);
 
-    readingsBulkUpdate($hash,$addtlPosReading,$rounded) if ( defined($addtlPosReading) );
-
   }
 
   readingsBulkUpdate($hash,"exact",$newExact);
 
+  readingsBulkUpdate($hash,$finalPosReading,$newExact) if ( ( defined($finalPosReading) ) && ( $isFinal ) );
+  
 	if ( defined( $updateState ) ) {
 		$hash->{updateState} = $updateState;
 	} else {
@@ -1591,6 +1655,7 @@ sub SOMFY_SendCommand($@)
 
 	my $io = $hash->{IODev};
   my $ioType = $io->{TYPE};
+  $ioType = "" if ( ! defined( $ioType ) );
 
   return $ret if(IsIgnored($name)); 
   return $ret if(IsDisabled($name));   
@@ -1611,7 +1676,7 @@ sub SOMFY_SendCommand($@)
 	}
 
 	# CUL specifics
-	if ($ioType ne "SIGNALduino") {
+	if ($ioType !~ m/SIGNALduino/) {
 		## Do we need to change RFMode to SlowRF?
 		if (   defined( $attr{ $name } )
 			&& defined( $attr{ $name }{"switch_rfmode"} ) )
@@ -1630,8 +1695,7 @@ sub SOMFY_SendCommand($@)
 		{
 			$message = "t" . $attr{ $name }{"symbol-length"};
 			IOWrite( $hash, "Y", $message );
-			Log GetLogLevel( $name, 4 ),
-			  "SOMFY set symbol-length: $message for $io->{NAME}";
+			Log3 $hash, 5, "SOMFY_send set symbol-length: $message for $io->{NAME}";
 		}
 	
 	
@@ -1641,8 +1705,7 @@ sub SOMFY_SendCommand($@)
 		{
 			$message = "r" . $attr{ $name }{"repetition"};
 			IOWrite( $hash, "Y", $message );
-			Log GetLogLevel( $name, 4 ),
-			  "SOMFY set repetition: $message for $io->{NAME}";
+			Log3 $hash, 5, "SOMFY_send set repetition: $message for $io->{NAME}";
 		}
 	}
 	
@@ -1678,10 +1741,11 @@ sub SOMFY_SendCommand($@)
 	  . uc( $hash->{ADDRESS} );
 
 	## Log that we are going to switch Somfy
-	Log GetLogLevel( $name, 4 ), "SOMFY set $name " . join(" ", @args) . ": $message";
+	Log3 $hash, 4, "SOMFY_send $name " . join(" ", @args) . ": $message";
+	Log3 $hash, 5, "SOMFY_send $name enc key : ". $new_enc_key."  rolling code : ".$new_rolling_code;
 
 	## Send Message to IODev using IOWrite
-	if ($ioType eq "SIGNALduino") {
+	if ($ioType =~ m/SIGNALduino/) {
 		my $SignalRepeats = AttrVal($name,'repetition', '6');
 		# swap address, remove leading s
 		my $decData = substr($message, 1, 8) . substr($message, 13, 2) . substr($message, 11, 2) . substr($message, 9, 2);
@@ -1692,7 +1756,7 @@ sub SOMFY_SendCommand($@)
 		#Log3 $hash, 4, "$hash->{IODev}->{NAME} SOMFY_sendCommand: $name -> message :$message: ";
 		IOWrite($hash, 'sendMsg', $message);
 	} else {
-		Log3($name,5,"SOMFY_sendCommand: $name -> message :$message: ");
+		#Log3($name,5,"SOMFY_sendCommand: $name -> message :$message: ");
 		IOWrite( $hash, "Y", $message );
 	}
 
@@ -1703,18 +1767,18 @@ sub SOMFY_SendCommand($@)
   SOMFY_storeRollCode( $hash, $new_rolling_code ) if ( AttrVal( $name, "autoStoreRollingCode", 0 ) );
   
   # modify definition of device with actual enc/rc
-  SOMFY_updateDef( $hash, $new_enc_key, $new_rolling_code );
+  # change 23.9.2020 - no update def anymore with rolling code (roll code and enc key will be removed)
+  # SOMFY_updateDef( $hash, $new_enc_key, $new_rolling_code );
 
 	# CUL specifics
-	if ($ioType ne "SIGNALduino") {
+	if ($ioType !~ m/SIGNALduino/) {
 		## Do we need to change symbol length back?
 		if (   defined( $attr{ $name } )
 			&& defined( $attr{ $name }{"symbol-length"} ) )
 		{
 			$message = "t" . $somfy_defsymbolwidth;
 			IOWrite( $hash, "Y", $message );
-			Log GetLogLevel( $name, 4 ),
-			  "SOMFY set symbol-length back: $message for $io->{NAME}";
+			Log3 $hash, 5, "SOMFY_send set symbol-length back: $message for $io->{NAME}";
 		}
 	
 		## Do we need to change repetition back?
@@ -1723,8 +1787,7 @@ sub SOMFY_SendCommand($@)
 		{
 			$message = "r" . $somfy_defrepetition;
 			IOWrite( $hash, "Y", $message );
-			Log GetLogLevel( $name, 4 ),
-			  "SOMFY set repetition back: $message for $io->{NAME}";
+			Log3 $hash, 5, "SOMFY_send set repetition back: $message for $io->{NAME}";
 		}
 	
 		## Do we need to change RFMode back to HomeMatic??
@@ -1751,7 +1814,8 @@ sub SOMFY_SendCommand($@)
 		$lh->{READINGS}{enc_key}{VAL}       = $new_enc_key;
 		$lh->{READINGS}{rolling_code}{TIME} = $tn;
 		$lh->{READINGS}{rolling_code}{VAL}  = $new_rolling_code;
-    SOMFY_updateDef( $lh, $new_enc_key, $new_rolling_code );
+    # change 23.9.2020 - no update def anymore with rolling code (roll code and enc key will be removed)
+    # SOMFY_updateDef( $lh, $new_enc_key, $new_rolling_code );
 	}
 	
 	return $ret;
@@ -1773,7 +1837,7 @@ sub SOMFY_SendCommand($@)
 =item summary_DE für Geräte, die das SOMFY RTS protocol unterstützen - Rolläden 
 =begin html
 
-<a name="SOMFY"></a>
+<a id="SOMFY"></a>
 <h3>SOMFY - Somfy RTS / Simu Hz protocol</h3>
 <ul>
   The Somfy RTS (identical to Simu Hz) protocol is used by a wide range of devices,
@@ -1786,7 +1850,7 @@ sub SOMFY_SendCommand($@)
 
   <br><br>
 
-  <a name="SOMFYdefine"></a>
+  <a id="SOMFY-define"></a>
   <b>Define</b>
   <ul>
     <code>define &lt;name&gt; SOMFY &lt;address&gt; [&lt;encryption-key&gt;] [&lt;rolling-code&gt;] </code>
@@ -1830,7 +1894,7 @@ sub SOMFY_SendCommand($@)
   </ul>
   <br>
 
-  <a name="SOMFYset"></a>
+  <a id="SOMFY-set"></a>
   <b>Set </b>
   <ul>
     <code>set &lt;name&gt; &lt;value&gt; [&lt;time&gt]</code>
@@ -1899,34 +1963,45 @@ sub SOMFY_SendCommand($@)
 
   <b>Get</b> <ul>N/A</ul><br>
 
-  <a name="SOMFYattr"></a>
+  <a id="SOMFY-attr"></a>
   <b>Attributes</b>
   <ul>
+    <a id="SOMFY-attr-IODev"></a>
     <li>IODev<br>
         Set the IO or physical device which should be used for sending signals
         for this "logical" device. An example for the physical device is a CUL.<br>
         Note: The IODev has to be set, otherwise no commands will be sent!<br>
         If you have both a CUL868 and CUL433, use the CUL433 as IODev for increased range.
 		</li><br>
-
+    <a id="SOMFY-attr-positionInverse"></a>
     <li>positionInverse<br>
         Inverse operation for positions instead of 0 to 100-200 the positions are ranging from 100 to 10 (down) and then to 0 (closed). The pos set command will point in this case to the reversed pos values. This does NOT reverse the operation of the on/off command, meaning that on always will move the shade down and off will move it up towards the initial position.
 		</li><br>
-
+    <a id="SOMFY-attr-additionalPosReading"></a>
     <li>additionalPosReading<br>
         Position of the shutter will be stored in the reading <code>pos</code> as numeric value. 
         Additionally this attribute might specify a name for an additional reading to be updated with the same value than the pos.
 		</li><br>
-
+    <a id="SOMFY-attr-finalPosReading"></a>
+    <li>finalPosReading<br>
+        This attribute can specify the name of an additional posReading that is only set at the end of a move. Meaning intermediate values are not set.
+        The name can not be any of the standard readings
+		</li><br>
+    <a id="SOMFY-attr-fixed_enckey"></a>
     <li>fixed_enckey 1|0<br>
         If set to 1 the enc-key is not changed after a command sent to the device. Default is value 0 meaning enc-key is changed normally for the RTS protocol.
 		</li><br>
-    
+    <a id="SOMFY-attr-autoStoreRollingCode"></a>
     <li>autoStoreRollingCode 1|0<br>
         If set to 1 the rolling code is stored automatically in the FHEM uniqueID file (Default is 0 - off). After setting the attribute, the code is first saved after the next change of the rolling code. 
 		</li><br>
     
-
+    <a id="SOMFY-attr-rawDevice"></a>
+    <li>rawDevice <somfy address - 6 digit hex> [ <list of further somfy addresses> ]<br>
+        If set this SOMFY device is representing a manual remote, that is used to control a somfy blind. The address of the blind (the physical blind) is specified in the rawdevice attribute to sync position changes in the blind when the remote is used. This requires an iodevice able to receive somfy commands (e.g. signalduino). Multiple physical blinds can be specified separated by space in the attribute.
+		</li><br>
+    
+    <a id="SOMFY-attr-eventMap"></a>
     <li>eventMap<br>
         Replace event names and set arguments. The value of this attribute
         consists of a list of space separated values, each value is a colon
@@ -1939,13 +2014,13 @@ sub SOMFY_SendCommand($@)
         set store open
         </code></ul>
         </li><br>
-
+    <a id="SOMFY-attr-do_not_notify"></a>
     <li><a href="#do_not_notify">do_not_notify</a></li><br>
-
+    <a id="SOMFY-attr-loglevel"></a>
     <li><a href="#loglevel">loglevel</a></li><br>
-
+    <a id="SOMFY-attr-showtime"></a>
     <li><a href="#showtime">showtime</a></li><br>
-
+    <a id="SOMFY-attr-model"></a>
     <li>model<br>
         The model attribute denotes the model type of the device.
         The attributes will (currently) not be used by the fhem.pl directly.
@@ -1961,7 +2036,7 @@ sub SOMFY_SendCommand($@)
           <b>Receiver/Actor</b>: somfyblinds<br>
     </li><br>
 
-
+    <a id="SOMFY-attr-ignore"></a>
     <li>ignore<br>
         Ignore this device, e.g. if it belongs to your neighbour. The device
         won't trigger any FileLogs/notifys, issued commands will silently
@@ -1972,24 +2047,24 @@ sub SOMFY_SendCommand($@)
         (see <a href="#devspec">devspec</a>). You still get them with the
         "ignored=1" special devspec.
         </li><br>
-
+    <a id="SOMFY-attr-drive-down-time-to-100"></a>
     <li>drive-down-time-to-100<br>
         The time the blind needs to drive down from "open" (pos 0) to pos 100.<br>
 		In this position, the lower edge touches the window frame, but it is not completely shut.<br>
 		For a mid-size window this time is about 12 to 15 seconds.
         </li><br>
-
+    <a id="SOMFY-attr-drive-down-time-to-close"></a>
     <li>drive-down-time-to-close<br>
         The time the blind needs to drive down from "open" (pos 0) to "close", the end position of the blind.<br>
         Note: If set, this value always needs to be higher than drive-down-time-to-100
 		This is about 3 to 5 seonds more than the "drive-down-time-to-100" value.
         </li><br>
-
+    <a id="SOMFY-attr-drive-up-time-to-100"></a>
     <li>drive-up-time-to-100<br>
         The time the blind needs to drive up from "close" (endposition) to "pos 100".<br>
 		This usually takes about 3 to 5 seconds.
         </li><br>
-
+    <a id="SOMFY-attr-drive-up-time-to-open"></a>
     <li>drive-up-time-to-open<br>
         The time the blind needs drive up from "close" (endposition) to "open" (upper endposition).<br>
         Note: If set, this value always needs to be higher than drive-down-time-to-100
